@@ -1,9 +1,9 @@
 import re
-import urllib.parse
 import httpx
+import urllib.parse
 from fastapi import FastAPI, Request, HTTPException
 
-app = FastAPI(title="HS Instagram Downloader", version="2.0")
+app = FastAPI(title="HS Instagram Downloader", version="3.0")
 
 DEVELOPER = "Haseeb Sahil"
 POWERED_BY = "@hsmodzofc2"
@@ -13,42 +13,38 @@ async def download(request: Request, url: str = None):
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'url' parameter")
 
-    encoded_url = urllib.parse.quote(url, safe="")
-    target_url = f"https://snapdownloader.com/tools/instagram-reels-downloader/download?url={encoded_url}"
+    # --- Fix encoding bug (don’t double-encode hashes or params) ---
+    safe_url = urllib.parse.quote(url, safe=":/?&=#")
+    target_url = f"https://snapdownloader.com/tools/instagram-reels-downloader/download?url={safe_url}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "text/html"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(target_url, headers=headers)
-            html = response.text if response.status_code == 200 else ""
+        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
+            res = await client.get(target_url, headers=headers)
+            html = res.text
     except Exception as e:
-        # Catch all HTTP or network-related errors
-        return {
-            "status": "error",
-            "message": f"Failed to fetch page: {str(e)}",
-            "developer": DEVELOPER,
-            "powered_by": POWERED_BY
-        }
+        raise HTTPException(status_code=500, detail=f"Request failed: {e}")
 
     if not html or "<html" not in html.lower():
         return {
             "status": "error",
-            "message": "Invalid or empty HTML response received.",
+            "message": "Failed to load target HTML. Source site may be blocking requests.",
             "developer": DEVELOPER,
             "powered_by": POWERED_BY
         }
 
-    # --- Extract video URL ---
-    video_match = re.search(r'<a[^>]+href="([^"]+\.mp4[^"]*)"', html)
-    video_url = urllib.parse.unquote(video_match.group(1)) if video_match else None
+    # --- Extract video URL (.mp4) ---
+    video_match = re.search(r'href="([^"]+\.mp4[^"]*)"', html)
+    video_url = video_match.group(1) if video_match else None
 
-    # --- Extract thumbnail ---
-    thumb_match = re.search(r'<a[^>]+href="([^"]+\.jpg[^"]*)"', html)
-    thumb_url = urllib.parse.unquote(thumb_match.group(1)) if thumb_match else None
+    # --- Extract thumbnail (.jpg) ---
+    thumb_match = re.search(r'href="([^"]+\.jpg[^"]*)"', html)
+    thumb_url = thumb_match.group(1) if thumb_match else None
 
     if video_url:
         return {
@@ -58,13 +54,14 @@ async def download(request: Request, url: str = None):
             "developer": DEVELOPER,
             "powered_by": POWERED_BY
         }
+    else:
+        return {
+            "status": "error",
+            "message": "Video not found or URL parsing failed (Bad URL hash or blocked request).",
+            "developer": DEVELOPER,
+            "powered_by": POWERED_BY
+        }
 
-    return {
-        "status": "error",
-        "message": "Unable to extract video link. The source page may have changed.",
-        "developer": DEVELOPER,
-        "powered_by": POWERED_BY
-    }
 
 @app.get("/ping")
 async def ping():
